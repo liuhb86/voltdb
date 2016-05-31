@@ -202,11 +202,6 @@ public abstract class AbstractJoinPlanNode extends AbstractPlanNode {
         final NodeSchema outer_schema = m_children.get(0).getOutputSchema();
         final NodeSchema inner_schema = m_children.get(1).getOutputSchema();
 
-        // resolve predicates
-        resolvePredicate(m_preJoinPredicate, outer_schema, inner_schema);
-        resolvePredicate(m_joinPredicate, outer_schema, inner_schema);
-        resolvePredicate(m_wherePredicate, outer_schema, inner_schema);
-
         // Resolve TVE indexes for each schema column.
         for (int i = 0; i < m_outputSchemaPreInlineAgg.size(); ++i) {
             SchemaColumn col = m_outputSchemaPreInlineAgg.getColumns().get(i);
