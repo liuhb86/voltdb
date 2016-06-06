@@ -63,7 +63,7 @@ public class PartitionDRGateway implements DurableUniqueIdListener {
     // Keep sync with EE DRConflictType at types.h
     public static enum DRConflictType {
         NO_CONFLICT,
-        CONSTRIANT_VIOLATION,
+        CONSTRAINT_VIOLATION,
         EXPECTED_ROW_MISSING,
         EXPECTED_ROW_TIMESTAMP_MISMATCH
     }
