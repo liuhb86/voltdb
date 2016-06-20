@@ -30,40 +30,40 @@ import org.voltdb.exceptions.SQLException;
 
 import java.util.Arrays;
 
-public class UpdatePartitionedSP  extends VoltProcedure {
+public class DeleteReplicatedMP extends VoltProcedure {
 
-    public final SQLStmt p_getCIDData = new SQLStmt(
-            "SELECT * FROM xdcr_partitioned p WHERE p.cid=? AND p.rid =? ORDER BY p.cid, p.rid desc;");
+    public final SQLStmt r_getCIDData = new SQLStmt(
+            "SELECT * FROM xdcr_replicated r WHERE r.cid = ? AND r.rid = ? ORDER BY r.cid, r.rid desc;");
 
-    public final SQLStmt p_update = new SQLStmt(
-            "UPDATE xdcr_partitioned SET key=?, value=? WHERE cid=? AND rid=?;");
+    public final SQLStmt r_delete = new SQLStmt(
+            "DELETE FROM xdcr_replicated WHERE cid=? AND rid=?;");
 
-    public VoltTable[] run(byte cid, long rid, byte[] key, byte[] value,  byte[] expectKey, byte[] expectValue, byte rollback, String scenario) {
-        voltQueueSQL(p_getCIDData, cid, rid);
+    public VoltTable[] run(byte cid, long rid, byte[] key, byte[] value, byte rollback, String scenario) {
+        voltQueueSQL(r_getCIDData, cid, rid);
         VoltTable[] results = voltExecuteSQL();
         VoltTable data = results[0];
+        data.advanceRow();
         if (data.getRowCount() == 0) {
             throw new SQLException(getClass().getName() +
                     " No record in table xdcr_partitioned for cid " + cid + ", rid " + rid + ", scenario " + scenario);
         }
 
-        data.advanceRow();
         byte[] extKey = data.getVarbinary("key");
-        if (! Arrays.equals(extKey, expectKey)) {
+        if (! Arrays.equals(extKey, key)) {
             throw new SQLException(getClass().getName() +
-                    " existing key " + extKey + " does not match expected key " + expectKey +
+                    " existing key " + extKey + " does not match expected key " + key +
                     " for cid " + cid + ", rid " + rid + ", scenario " + scenario);
         }
 
         byte[] extValue = data.getVarbinary("value");
-        if (! Arrays.equals(extValue, expectValue)) {
+        if (! Arrays.equals(extValue, value)) {
             throw new SQLException(getClass().getName() +
-                    " existing value " + extValue + " does not match expected key " + expectValue +
+                    " existing value " + extValue + " does not match expected key " + value +
                     " for cid " + cid + ", rid " + rid + ", scenario " + scenario);
         }
 
-        voltQueueSQL(p_update, key, value, cid, rid);
-        voltQueueSQL(p_getCIDData, cid, rid);
+        voltQueueSQL(r_delete, cid, rid);
+        voltQueueSQL(r_getCIDData, cid, rid);
         return voltExecuteSQL(true);
     }
 }

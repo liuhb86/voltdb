@@ -30,15 +30,15 @@ import org.voltdb.exceptions.SQLException;
 
 import java.util.Arrays;
 
-public class UpdatePartitionedSP  extends VoltProcedure {
+public class DeletePartitionedSP extends VoltProcedure {
 
     public final SQLStmt p_getCIDData = new SQLStmt(
             "SELECT * FROM xdcr_partitioned p WHERE p.cid=? AND p.rid =? ORDER BY p.cid, p.rid desc;");
 
-    public final SQLStmt p_update = new SQLStmt(
-            "UPDATE xdcr_partitioned SET key=?, value=? WHERE cid=? AND rid=?;");
+    public final SQLStmt p_delete = new SQLStmt(
+            "DELETE FROM xdcr_partitioned WHERE cid=? AND rid=?;");
 
-    public VoltTable[] run(byte cid, long rid, byte[] key, byte[] value,  byte[] expectKey, byte[] expectValue, byte rollback, String scenario) {
+    public VoltTable[] run(byte cid, long rid, byte[] key, byte[] value, byte rollback, String scenario) {
         voltQueueSQL(p_getCIDData, cid, rid);
         VoltTable[] results = voltExecuteSQL();
         VoltTable data = results[0];
@@ -49,20 +49,20 @@ public class UpdatePartitionedSP  extends VoltProcedure {
 
         data.advanceRow();
         byte[] extKey = data.getVarbinary("key");
-        if (! Arrays.equals(extKey, expectKey)) {
+        if (! Arrays.equals(extKey, key)) {
             throw new SQLException(getClass().getName() +
-                    " existing key " + extKey + " does not match expected key " + expectKey +
+                    " existing key " + extKey + " does not match expected key " + key +
                     " for cid " + cid + ", rid " + rid + ", scenario " + scenario);
         }
 
         byte[] extValue = data.getVarbinary("value");
-        if (! Arrays.equals(extValue, expectValue)) {
+        if (! Arrays.equals(extValue, value)) {
             throw new SQLException(getClass().getName() +
-                    " existing value " + extValue + " does not match expected key " + expectValue +
+                    " existing value " + extValue + " does not match expected key " + value +
                     " for cid " + cid + ", rid " + rid + ", scenario " + scenario);
         }
 
-        voltQueueSQL(p_update, key, value, cid, rid);
+        voltQueueSQL(p_delete, cid, rid);
         voltQueueSQL(p_getCIDData, cid, rid);
         return voltExecuteSQL(true);
     }

@@ -29,6 +29,10 @@ import org.voltdb.client.ClientResponse;
 import org.voltdb.client.ProcCallException;
 import xdcrSelfCheck.ClientPayloadProcessor;
 import xdcrSelfCheck.ClientThread;
+import xdcrSelfCheck.resolves.XdcrConflict.ACTION_TYPE;
+import xdcrSelfCheck.resolves.XdcrConflict.CONFLICT_TYPE;
+import xdcrSelfCheck.resolves.XdcrConflict.DECISION;
+import xdcrSelfCheck.resolves.XdcrConflict.DIVERGENCE;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -43,25 +47,28 @@ class IICVConflictRunner extends ClientConflictRunner {
     public void runScenario(final String tableName) throws Throwable {
         final String procName = getInsertProcCall(tableName);
         final ClientPayloadProcessor.Pair payload = processor.generateForStore();
-        CompletableFuture<VoltTable[]> primary = CompletableFuture.supplyAsync(
-                () -> {
-                    try {
-                        return clientThread.callStoreProcedure(primaryClient, rid, procName, payload);
-                    } catch (Exception e) {
-                        throw new CompletionException(e);
-                    }
-                });
-
-        CompletableFuture<VoltTable[]> secondary = CompletableFuture.supplyAsync(
-                () -> {
-                    try {
-                        return clientThread.callStoreProcedure(secondaryClient, rid + 1, procName, payload);
-                    } catch (Exception e) {
-                        throw new CompletionException(e);
-                    }
-                });
+        final long newRid = clientThread.getAndIncrementRid();
 
         try {
+            CompletableFuture<VoltTable[]> primary = CompletableFuture.supplyAsync(
+                    () -> {
+                        try {
+                            return clientThread.callStoreProcedure(primaryClient, rid, procName, payload);
+                        } catch (Exception e) {
+                            throw new CompletionException(e);
+                        }
+                    });
+
+            CompletableFuture<VoltTable[]> secondary = CompletableFuture.supplyAsync(
+                    () -> {
+                        try {
+                            return clientThread.callStoreProcedure(secondaryClient, newRid, procName, payload);
+                        } catch (Exception e) {
+                            throw new CompletionException(e);
+                        }
+                    });
+
+
             CompletableFuture.allOf(primary, secondary).join();
 
             VoltTable[] primaryResult = primary.get();
@@ -70,22 +77,30 @@ class IICVConflictRunner extends ClientConflictRunner {
 
             VoltTable[] secondaryResult = secondary.get();
             VoltTable secondaryData = secondaryResult[2];
-            verifyTableData("secondary", tableName, rid + 1, secondaryData, 1, 0, payload);
+            verifyTableData("secondary", tableName, newRid, secondaryData, 1, 0, payload);
+
+            logXdcrConflict(primaryClient, tableName, primaryData, 0, newRid,
+                    ACTION_TYPE.I, CONFLICT_TYPE.CNST, DECISION.R, DIVERGENCE.D);
+
+            logXdcrConflict(secondaryClient, tableName, secondaryData, 0, rid,
+                    ACTION_TYPE.I, CONFLICT_TYPE.CNST, DECISION.R, DIVERGENCE.D);
         } catch (CompletionException ce) {
             Throwable cause = ce.getCause();
             if (cause instanceof ProcCallException) {
                 ProcCallException pe = (ProcCallException) cause;
                 ClientResponseImpl cri = (ClientResponseImpl) pe.getClientResponse();
-                if ((cri.getStatus() == ClientResponse.GRACEFUL_FAILURE)) {
-                    LOG.warn("Received store procedure exceptions", pe);
-                    // no xdcr conflict
+                if ((cri.getStatus() == ClientResponse.GRACEFUL_FAILURE)) { // no xdcr conflict
+                    LOG.warn("Received IICV exceptions for cid " + cid + ", rid " + rid + ", next rid " + newRid);
+                    logXdcrNoConflict(primaryClient, tableName, cid, rid, newRid,
+                            ACTION_TYPE.I, CONFLICT_TYPE.IICV, DECISION.A, DIVERGENCE.C);
+                    logXdcrNoConflict(secondaryClient, tableName, cid, rid, newRid,
+                            ACTION_TYPE.I, CONFLICT_TYPE.IICV, DECISION.A, DIVERGENCE.C);
                     return;
                 }
             }
 
             throw ce;
-        } finally {
-            resetTable(tableName, true);
         }
     }
+
 }

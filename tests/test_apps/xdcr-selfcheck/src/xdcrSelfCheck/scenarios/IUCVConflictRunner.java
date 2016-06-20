@@ -29,6 +29,11 @@ import org.voltdb.client.ClientResponse;
 import org.voltdb.client.ProcCallException;
 import xdcrSelfCheck.ClientPayloadProcessor;
 import xdcrSelfCheck.ClientThread;
+import xdcrSelfCheck.resolves.XdcrConflict;
+import xdcrSelfCheck.resolves.XdcrConflict.ACTION_TYPE;
+import xdcrSelfCheck.resolves.XdcrConflict.CONFLICT_TYPE;
+import xdcrSelfCheck.resolves.XdcrConflict.DECISION;
+import xdcrSelfCheck.resolves.XdcrConflict.DIVERGENCE;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -41,16 +46,18 @@ class IUCVConflictRunner extends ClientConflictRunner {
 
     @Override
     public void runScenario(final String tableName) throws Throwable {
-        try {
-            final String insertProcName = getInsertProcCall(tableName);
-            final ClientPayloadProcessor.Pair primaryPayload = processor.generateForStore();
-            final ClientPayloadProcessor.Pair secondaryPayload = processor.generateForStore();
 
+        final long newRid = clientThread.getAndIncrementRid();
+        final String insertProcName = getInsertProcCall(tableName);
+        final ClientPayloadProcessor.Pair primaryPayload = processor.generateForStore();
+        final ClientPayloadProcessor.Pair secondaryPayload = processor.generateForStore();
+
+        try {
             CompletableFuture<VoltTable[]> secondary = CompletableFuture.supplyAsync(
                     () -> {
                         try {
                             VoltTable[] result = clientThread.callStoreProcedure(secondaryClient, rid, insertProcName, secondaryPayload);
-                            waitForApplyBinaryLog(cid, tableName, secondaryClient, 1, primaryClient, 1);
+                            waitForApplyBinaryLog(cid, rid, tableName, secondaryClient, 1, primaryClient, 1);
                             return result;
                         } catch (Exception e) {
                             throw new CompletionException(e);
@@ -58,53 +65,61 @@ class IUCVConflictRunner extends ClientConflictRunner {
                     });
 
             secondary.join();
+        } catch (CompletionException ce) {
+            throw ce.getCause();
+        }
 
+        try {
             CompletableFuture<VoltTable[]> primary = CompletableFuture.supplyAsync(
                     () -> {
                         try {
-                            return clientThread.callStoreProcedure(primaryClient, rid + 1, insertProcName, primaryPayload);
+                            return clientThread.callStoreProcedure(primaryClient, newRid, insertProcName, primaryPayload);
                         } catch (Exception e) {
                             throw new CompletionException(e);
                         }
                     });
 
             final String updateProcName = getUpdateProcCall(tableName);
-            secondary = CompletableFuture.supplyAsync(
+            CompletableFuture<VoltTable[]> secondary = CompletableFuture.supplyAsync(
                     () -> {
                         try {
-                            return clientThread.callStoreProcedure(secondaryClient, rid, updateProcName, primaryPayload);
+                            return clientThread.callStoreProcedure(secondaryClient, rid, updateProcName,
+                                    primaryPayload, secondaryPayload, "IUCVConflictRunner:81");
                         } catch (Exception e) {
                             throw new CompletionException(e);
                         }
                     });
 
-            try {
-                CompletableFuture.allOf(primary, secondary).join();
-                VoltTable[] primaryResult = primary.get();
-                VoltTable primaryData = primaryResult[2];
-                verifyTableData("primary", tableName, rid + 1, primaryData, 2, 0, primaryPayload);
+            CompletableFuture.allOf(primary, secondary).join();
+            VoltTable[] primaryResult = primary.get();
+            VoltTable primaryData = primaryResult[2];
+            verifyTableData("primary", tableName, newRid, primaryData, 1, 0, primaryPayload);
 
-                VoltTable[] secondaryResult = secondary.get();
-                VoltTable secondaryData = secondaryResult[1];
-                verifyTableData("secondary", tableName, rid, secondaryData, 1, 0, primaryPayload);
-            } catch (CompletionException ce) {
-                Throwable cause = ce.getCause();
-                if (cause instanceof ProcCallException) {
-                    ProcCallException pe = (ProcCallException) cause;
-                    ClientResponseImpl cri = (ClientResponseImpl) pe.getClientResponse();
-                    if ((cri.getStatus() == ClientResponse.GRACEFUL_FAILURE)) {
-                        LOG.warn("Received store procedure exceptions", pe);
-                        // no xdcr conflict
-                        return;
-                    }
-                }
+            VoltTable[] secondaryResult = secondary.get();
+            VoltTable secondaryData = secondaryResult[1];
+            verifyTableData("secondary", tableName, rid, secondaryData, 1, 0, primaryPayload);
 
-                throw ce;
-            }
+            logXdcrConflict(primaryClient, tableName, primaryData, 0, rid,
+                    ACTION_TYPE.I, CONFLICT_TYPE.CNST, DECISION.R, DIVERGENCE.D);
+
+            logXdcrConflict(secondaryClient, tableName, secondaryData, 0, newRid,
+                    ACTION_TYPE.U, CONFLICT_TYPE.CNST, DECISION.R, DIVERGENCE.D);
         } catch (CompletionException ce) {
-            throw ce.getCause();
-        } finally {
-            resetTable(tableName);
+            Throwable cause = ce.getCause();
+            if (cause instanceof ProcCallException) {
+                ProcCallException pe = (ProcCallException) cause;
+                ClientResponseImpl cri = (ClientResponseImpl) pe.getClientResponse();
+                if ((cri.getStatus() == ClientResponse.GRACEFUL_FAILURE)) { // no xdcr conflict
+                    LOG.warn("Received IUCV exceptions for cid " + cid + ", rid " + rid + ", next rid " + newRid);
+                    logXdcrNoConflict(primaryClient, tableName, cid, rid, newRid,
+                            ACTION_TYPE.I, CONFLICT_TYPE.IUCV, DECISION.A, DIVERGENCE.C);
+                    logXdcrNoConflict(secondaryClient, tableName, cid, rid, newRid,
+                            ACTION_TYPE.I, CONFLICT_TYPE.IUCV, DECISION.A, DIVERGENCE.C);
+                    return;
+                }
+            }
+
+            throw ce;
         }
     }
 }

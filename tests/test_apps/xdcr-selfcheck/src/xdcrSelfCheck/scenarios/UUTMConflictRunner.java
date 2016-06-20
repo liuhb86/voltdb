@@ -23,10 +23,18 @@
 
 package xdcrSelfCheck.scenarios;
 
+import org.voltdb.ClientResponseImpl;
 import org.voltdb.VoltProcedure.VoltAbortException;
 import org.voltdb.VoltTable;
+import org.voltdb.client.ClientResponse;
+import org.voltdb.client.ProcCallException;
 import xdcrSelfCheck.ClientPayloadProcessor;
 import xdcrSelfCheck.ClientThread;
+import xdcrSelfCheck.resolves.XdcrConflict;
+import xdcrSelfCheck.resolves.XdcrConflict.ACTION_TYPE;
+import xdcrSelfCheck.resolves.XdcrConflict.CONFLICT_TYPE;
+import xdcrSelfCheck.resolves.XdcrConflict.DECISION;
+import xdcrSelfCheck.resolves.XdcrConflict.DIVERGENCE;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -49,19 +57,24 @@ class UUTMConflictRunner extends ClientConflictRunner {
                     () -> {
                         try {
                             VoltTable[] result = clientThread.callStoreProcedure(primaryClient, rid, insertProcName, seedPayload);
-                            waitForApplyBinaryLog(cid, tableName, primaryClient, 1, secondaryClient, 1);
+                            waitForApplyBinaryLog(cid, rid, tableName, primaryClient, 1, secondaryClient, 1);
                             return result;
                         } catch (Exception e) {
                             throw new CompletionException(e);
                         }
                     });
             primary.join();
+        } catch (CompletionException ce) {
+            throw ce.getCause();
+        }
 
-            final String updateProcName = getUpdateProcCall(tableName);
-            primary = CompletableFuture.supplyAsync(
+        final String updateProcName = getUpdateProcCall(tableName);
+        try {
+            CompletableFuture<VoltTable[]> primary = CompletableFuture.supplyAsync(
                     () -> {
                         try {
-                            return clientThread.callStoreProcedure(primaryClient, rid, updateProcName, racePrimaryPayload);
+                            return clientThread.callStoreProcedure(primaryClient, rid, updateProcName,
+                                    racePrimaryPayload, seedPayload, "UUTMConflictRunner:72");
                         } catch (Exception e) {
                             throw new CompletionException(e);
                         }
@@ -70,7 +83,8 @@ class UUTMConflictRunner extends ClientConflictRunner {
             CompletableFuture<VoltTable[]> secondary = CompletableFuture.supplyAsync(
                     () -> {
                         try {
-                            return clientThread.callStoreProcedure(secondaryClient, rid, updateProcName, raceSecondaryPayload);
+                            return clientThread.callStoreProcedure(secondaryClient, rid, updateProcName,
+                                    raceSecondaryPayload, seedPayload, "UUTMConflictRunner:82");
                         } catch (Exception e) {
                             throw new CompletionException(e);
                         }
@@ -78,26 +92,35 @@ class UUTMConflictRunner extends ClientConflictRunner {
 
             CompletableFuture.allOf(primary, secondary).join();
 
-            final String readProcName = getReadProcCall(tableName);
-            VoltTable[] primaryResult = primaryClient.callProcedure(readProcName, cid).getResults();
-            VoltTable primaryData = primaryResult[0];
-            try {
-                verifyTableData("primary", tableName, rid, primaryData, 1, 0, racePrimaryPayload);
-            } catch (VoltAbortException vae) {
-                verifyTableData("primary", tableName, rid, primaryData, 1, 0, raceSecondaryPayload);
+            VoltTable[] primaryResult = primary.get();
+            VoltTable primaryData = primaryResult[1];
+            verifyTableData("primary", tableName, rid, primaryData, 1, 0, racePrimaryPayload);
+
+            VoltTable[] secondaryResult = secondary.get();
+            VoltTable secondaryData = secondaryResult[1];
+            verifyTableData("secondary", tableName, rid, secondaryData, 1, 0, raceSecondaryPayload);
+
+            logXdcrConflict(primaryClient, tableName, primaryData, 0, rid,
+                    ACTION_TYPE.U, CONFLICT_TYPE.MSMT, DECISION.A, DIVERGENCE.C);
+
+            logXdcrConflict(secondaryClient, tableName, secondaryData, 0, rid,
+                    ACTION_TYPE.U, CONFLICT_TYPE.MSMT, DECISION.A, DIVERGENCE.C);
+        } catch (CompletionException ce) {
+            Throwable cause = ce.getCause();
+            if (cause instanceof ProcCallException) {
+                ProcCallException pe = (ProcCallException) cause;
+                ClientResponseImpl cri = (ClientResponseImpl) pe.getClientResponse();
+                if (cri.getStatus() == ClientResponse.GRACEFUL_FAILURE) { // no xdcr conflict
+                    LOG.warn("Received IICV exceptions for cid " + cid + ", rid " + rid);
+                    logXdcrNoConflict(primaryClient, tableName, cid, rid, rid,
+                            ACTION_TYPE.U, CONFLICT_TYPE.UUTM, DECISION.A, DIVERGENCE.C);
+                    logXdcrNoConflict(secondaryClient, tableName, cid, rid, rid,
+                            ACTION_TYPE.U, CONFLICT_TYPE.UUTM, DECISION.A, DIVERGENCE.C);
+                    return;
+                }
             }
 
-            VoltTable[] secondaryResult = secondaryClient.callProcedure(readProcName, cid).getResults();
-            VoltTable secondaryData = secondaryResult[0];
-            try {
-                verifyTableData("secondary", tableName, rid, secondaryData, 1, 0, raceSecondaryPayload);
-            } catch (VoltAbortException vae) {
-                verifyTableData("secondary", tableName, rid, secondaryData, 1, 0, racePrimaryPayload);
-            }
-        } catch (CompletionException ce) {
-            throw ce.getCause();
-        } finally {
-            resetTable(tableName);
+            throw ce;
         }
     }
 }

@@ -24,21 +24,21 @@
 package xdcrSelfCheck.procedures;
 
 import org.voltdb.SQLStmt;
+import org.voltdb.VoltProcedure;
+import org.voltdb.VoltTable;
 
-public class ReplicatedInsertBaseProc extends InsertBaseProc {
+public class InsertXdcrPartitionedExpectedSP extends VoltProcedure {
 
-    public final SQLStmt r_getCIDData = new SQLStmt(
-            "SELECT * FROM xdcr_replicated r WHERE r.cid = ? AND r.rid = ? ORDER BY r.cid, r.rid desc;");
+    private final SQLStmt p_insert = new SQLStmt(
+            "INSERT INTO xdcr_partitioned_conflict_expected (cid, rid, clusterid, extrid," +
+                    " action_type, conflict_type, decision, ts, divergence, key, value)" +
+                    "   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
 
-    public final SQLStmt r_cleanUp = new SQLStmt(
-            "DELETE FROM xdcr_replicated WHERE cid = ? and cnt < ?;");
-
-    public final SQLStmt r_insert = new SQLStmt(
-            "INSERT INTO xdcr_replicated (clusterid, txnid, prevtxnid, ts, cid, cidallhash, rid, cnt, key, value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
-
-    @Override
-    public long run() {
-        return 0; // never called in base procedure
+    public VoltTable[] run(byte cid, long rid, long clusterid, long extrid,
+                           String action_type, String conflict_type,
+                           String decision, String ts, String divergence,
+                           byte[] key, byte[] value) {
+        voltQueueSQL(p_insert, cid, rid, clusterid, extrid, action_type, conflict_type, decision, ts, divergence, key, value);
+        return voltExecuteSQL(true);
     }
-
 }

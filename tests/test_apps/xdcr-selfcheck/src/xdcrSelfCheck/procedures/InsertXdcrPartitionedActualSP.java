@@ -27,12 +27,18 @@ import org.voltdb.SQLStmt;
 import org.voltdb.VoltProcedure;
 import org.voltdb.VoltTable;
 
-public class ReadMP extends VoltProcedure {
+public class InsertXdcrPartitionedActualSP extends VoltProcedure {
 
-    public final SQLStmt r_getCIDData = new SQLStmt("SELECT * FROM xdcr_replicated r WHERE r.cid = ? ORDER BY r.cid, r.rid desc;");
+    private final SQLStmt p_insert = new SQLStmt(
+            "INSERT INTO xdcr_partitioned_conflict_actual (cid, rid, clusterid, current_clusterid, current_ts," +
+                    " row_type, action_type, conflict_type, conflict_on_primary_key, decision, ts, divergence, tuple)" +
+                    "   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
 
-    public VoltTable[] run(byte cid) {
-        voltQueueSQL(r_getCIDData, cid);
+    public VoltTable[] run(byte cid, long rid, long clusterid, long current_clusterid, String current_ts,
+                           String row_type, String action_type, String conflict_type, byte conflict_on_primary_key,
+                           String decision, String ts, String divergence, byte[] tuple) {
+        voltQueueSQL(p_insert, cid, rid, clusterid, current_clusterid, current_ts,
+                row_type, action_type, conflict_type, conflict_on_primary_key, decision, ts, divergence, tuple);
         return voltExecuteSQL(true);
     }
 }

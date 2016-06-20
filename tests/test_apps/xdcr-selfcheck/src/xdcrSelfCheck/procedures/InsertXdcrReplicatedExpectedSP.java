@@ -27,13 +27,18 @@ import org.voltdb.SQLStmt;
 import org.voltdb.VoltProcedure;
 import org.voltdb.VoltTable;
 
-public class ReadSP extends VoltProcedure {
+public class InsertXdcrReplicatedExpectedSP extends VoltProcedure {
 
-    // join partitioned tbl to replicated tbl. This enables detection of some replica faults.
-    public final SQLStmt p_getCIDData = new SQLStmt("SELECT * FROM xdcr_partitioned p WHERE p.cid = ? ORDER BY p.cid, p.rid desc;");
+    private final SQLStmt r_insert = new SQLStmt(
+            "INSERT INTO xdcr_replicated_conflict_expected (cid, rid, clusterid, extrid," +
+                    " action_type, conflict_type, decision, ts, divergence, key, value)" +
+                    "   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);");
 
-    public VoltTable[] run(byte cid) {
-        voltQueueSQL(p_getCIDData, cid);
+    public VoltTable[] run(byte cid, long rid, long clusterid, long extrid,
+                           String action_type, String conflict_type,
+                           String decision, String ts, String divergence,
+                           byte[] key, byte[] value) {
+        voltQueueSQL(r_insert, cid, rid, clusterid, extrid, action_type, conflict_type, decision, ts, divergence, key, value);
         return voltExecuteSQL(true);
     }
 }

@@ -116,9 +116,27 @@ public class ClientThread extends BenchmarkThread {
                                           long rid,
                                           String procName,
                                           ClientPayloadProcessor.Pair payload) throws Exception {
+        return callStoreProcedure(client, rid, procName, payload, null, null);
+    }
+
+    public VoltTable[] callStoreProcedure(Client client,
+                                          long rid,
+                                          String procName,
+                                          ClientPayloadProcessor.Pair payload,
+                                          ClientPayloadProcessor.Pair expected,
+                                          String scenario) throws Exception {
         ClientResponse response;
         try {
-            response = client.callProcedure(procName, m_cid, rid, payload.Key.getBytes(), payload.getStoreValue(), (byte) 0);
+            response = expected != null
+                    ? (payload != null
+                            ? client.callProcedure(procName, m_cid, rid,
+                                    payload.Key.getBytes(), payload.getStoreValue(), expected.Key.getBytes(), expected.getStoreValue(),
+                                    (byte) 0, scenario)
+                            : client.callProcedure(procName, m_cid, rid,
+                                    expected.Key.getBytes(), expected.getStoreValue(),
+                                    (byte) 0, scenario))
+                    : client.callProcedure(procName, m_cid, rid,
+                            payload.Key.getBytes(), payload.getStoreValue(), (byte) 0);
         } catch (Exception e) {
             log.warn("ClientThread threw after " + m_txnsRun.get() +
                     " calls while calling procedure: " + procName +
@@ -165,7 +183,6 @@ public class ClientThread extends BenchmarkThread {
             }
             while (m_primaryclient.getConnectedHostList().size() == 0
                     || m_secondaryclient.getConnectedHostList().size() == 0);
-
         }
     }
 
@@ -176,12 +193,18 @@ public class ClientThread extends BenchmarkThread {
                 m_permits.acquire();
 
                 String tableName = new Random().nextInt(2) == 0 ? "xdcr_partitioned" : "xdcr_replicated";
+                //String tableName = "xdcr_partitioned";
                 List<Integer> ordinals = ConflictType.ordinals();
                 Collections.shuffle(ordinals);
                 for (int ord : ordinals) {
                     ConflictType conflictType = ConflictType.fromOrdinal(ord);
                     runOne(tableName, conflictType);
                 }
+
+/*                String tableName = "xdcr_replicated";
+                final int ord = 5;
+                ConflictType conflictType = ConflictType.fromOrdinal(ord);
+                runOne(tableName, conflictType);*/
 
                 m_shouldContinue.set(false);
             }
@@ -232,8 +255,8 @@ public class ClientThread extends BenchmarkThread {
         return m_cid;
     }
 
-    public AtomicLong getNextRid() {
-        return m_nextRid;
+    public long getAndIncrementRid() {
+        return m_nextRid.getAndIncrement();
     }
 
     public ClientPayloadProcessor getClientPayloadProcessor() {

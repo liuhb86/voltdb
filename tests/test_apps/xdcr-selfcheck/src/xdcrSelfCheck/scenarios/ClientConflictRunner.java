@@ -29,9 +29,16 @@ import org.voltdb.VoltTable;
 import org.voltdb.VoltTableRow;
 import org.voltdb.client.Client;
 import org.voltdb.client.ClientResponse;
+import org.voltdb.client.ProcCallException;
 import xdcrSelfCheck.ClientPayloadProcessor;
 import xdcrSelfCheck.ClientThread;
+import xdcrSelfCheck.resolves.XdcrConflict;
+import xdcrSelfCheck.resolves.XdcrConflict.ACTION_TYPE;
+import xdcrSelfCheck.resolves.XdcrConflict.CONFLICT_TYPE;
+import xdcrSelfCheck.resolves.XdcrConflict.DECISION;
+import xdcrSelfCheck.resolves.XdcrConflict.DIVERGENCE;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
@@ -71,12 +78,15 @@ public abstract class ClientConflictRunner {
     protected final byte cid;
     protected final long rid;
 
-
-    protected static VoltLogger LOG = new VoltLogger(ClientConflictRunner.class.getSimpleName());
     private final static String PARTITIONED_TABLE= "xdcr_partitioned";
     private final static String REPLICATED_TABLE= "xdcr_replicated";
-    private final static String APPLYBINARYLOGSP_PROC= "ApplyBinaryLogSP";
-    private final static String APPLYBINARYLOGMP_PROC= "ApplyBinaryLogMP";
+    private final static long UNKNOWN_CLUSTERID = -1;
+    private final static String UNKNOWN_TS = "0";
+    private final static byte[] UNKNOWN_KEY = "NULL".getBytes();
+    private final static byte[] UNKNOWN_VALUE = "NULL".getBytes();
+
+    static VoltLogger LOG = new VoltLogger(ClientConflictRunner.class.getSimpleName());
+
 
     protected ClientConflictRunner(ClientThread clientThread) {
         this.clientThread = clientThread;
@@ -84,7 +94,7 @@ public abstract class ClientConflictRunner {
         secondaryClient = clientThread.getSecondaryClient();
         processor = clientThread.getClientPayloadProcessor();
         cid = clientThread.getCid();
-        rid = clientThread.getNextRid().get();
+        rid = clientThread.getAndIncrementRid();
     }
 
     public static ClientConflictRunner getInstance(ClientThread clientThread, ConflictType conflictType) {
@@ -106,29 +116,14 @@ public abstract class ClientConflictRunner {
         }
     }
 
-    static long getProcCallCounts(Client client, String applyBinaryCall) throws Exception {
-        ClientResponse cr = client.callProcedure("@Statistics", "PROCEDURE", 0);
-        VoltTable results = cr.getResults()[0];
-
-        while (results.advanceRow()) {
-            String procName = results.getString("PROCEDURE");
-            long callCount = results.getLong("INVOCATIONS");
-            if (procName.contains(applyBinaryCall)) {
-                return callCount;
-            }
-        }
-
-        return 0;
-    }
-
-    static void waitForApplyBinaryLog(byte cid, String tableName,
+    static void waitForApplyBinaryLog(byte cid, long rid, String tableName,
                                       Client primaryClient, long numPrimaryExpected,
                                       Client secondaryClient, long numSecondaryExpected) throws Exception {
         boolean done = false;
         final long start = System.currentTimeMillis();
         while (!done && System.currentTimeMillis() - start < 60000) {
-            long primaryCount = primaryClient.callProcedure("@AdHoc", "SELECT COUNT(*) FROM " + tableName + " WHERE cid=?;", cid).getResults()[0].asScalarLong();
-            long secondaryCount = secondaryClient.callProcedure("@AdHoc", "SELECT COUNT(*) FROM " + tableName + " WHERE cid=?;", cid).getResults()[0].asScalarLong();
+            long primaryCount = primaryClient.callProcedure("@AdHoc", "SELECT COUNT(*) FROM " + tableName + " WHERE cid=? AND rid=?;", cid, rid).getResults()[0].asScalarLong();
+            long secondaryCount = secondaryClient.callProcedure("@AdHoc", "SELECT COUNT(*) FROM " + tableName + " WHERE cid=? AND rid=?;", cid, rid).getResults()[0].asScalarLong();
             done = (primaryCount == numPrimaryExpected && secondaryCount == numSecondaryExpected);
         }
     }
@@ -170,20 +165,40 @@ public abstract class ClientConflictRunner {
         }
     }
 
-    protected void resetTable(String tableName) throws Exception {
-        resetTable(tableName, false);
-    }
+    protected void logXdcrConflict(Client client, String tableName, VoltTable table, int rowIdx, long extRid,
+                                   ACTION_TYPE action_type, CONFLICT_TYPE conflict_type, DECISION decision, DIVERGENCE divergence)
+            throws IOException, ProcCallException {
 
-    protected void resetTable(String tableName, boolean both) throws Exception {
-        primaryClient.callProcedure("@AdHoc", "DELETE FROM " + tableName + " WHERE cid=?;", cid);
-        if (both) {
-            secondaryClient.callProcedure("@AdHoc", "DELETE FROM " + tableName + " WHERE cid=?;", cid);
+        final String procName = getXdcrConflictLogProcCall(tableName);
+        try {
+            VoltTableRow tuple = table.fetchRow(rowIdx);
+            byte cid = (byte) tuple.getLong("cid");
+            long rid = tuple.getLong("rid");
+            long clusterid = tuple.getLong("clusterid");
+            String ts = Long.toString(tuple.getLong("ts"));
+            byte[] key = tuple.getVarbinary("key");
+            byte[] value = tuple.getVarbinary("value");
+
+            client.callProcedure(procName, cid, rid, clusterid, extRid,
+                    action_type.name(), conflict_type.name(), decision.name(), ts, divergence.name(), key, value);
+        } catch (Exception e) {
+            LOG.warn("Exception running " + procName, e);
+            throw e;
         }
-        waitForApplyBinaryLog(cid, tableName, primaryClient, 0, secondaryClient, 0);
     }
 
-    protected VoltTable[] selectTable(Client client, String tableName) throws Exception {
-        return client.callProcedure("@AdHoc", "SELECT * FROM " + tableName + " WHERE cid=?;", cid).getResults();
+    protected void logXdcrNoConflict(Client client, String tableName, byte cid, long rid, long extRid,
+                                     ACTION_TYPE action_type, CONFLICT_TYPE conflict_type, DECISION decision, DIVERGENCE divergence)
+            throws IOException, ProcCallException {
+
+        final String procName = getXdcrConflictLogProcCall(tableName);
+        try {
+            client.callProcedure(procName, cid, rid, UNKNOWN_CLUSTERID, extRid,
+                    action_type.name(), conflict_type.name(), decision.name(), UNKNOWN_TS, divergence.name(), UNKNOWN_KEY, UNKNOWN_VALUE);
+        } catch (Exception e) {
+            LOG.warn("Exception running " + procName, e);
+            throw e;
+        }
     }
 
     protected String getInsertProcCall(String tableName) {
@@ -208,23 +223,23 @@ public abstract class ClientConflictRunner {
         }
     }
 
-    protected String getApplyBinaryLogProcCall(String tableName) {
+    protected String getDeleteProcCall(String tableName) {
         switch (tableName) {
             case PARTITIONED_TABLE:
-                return APPLYBINARYLOGSP_PROC;
+                return "DeletePartitionedSP";
             case REPLICATED_TABLE:
-                return APPLYBINARYLOGMP_PROC;
+                return "DeleteReplicatedMP";
             default:
                 throw new IllegalArgumentException("Unrecognized table name: " + tableName);
         }
     }
 
-    protected String getReadProcCall(String tableName) {
+    protected String getXdcrConflictLogProcCall(String tableName) {
         switch (tableName) {
             case PARTITIONED_TABLE:
-                return "ReadSP";
+                return "InsertXdcrPartitionedExpectedSP";
             case REPLICATED_TABLE:
-                return "ReadMP";
+                return "InsertXdcrReplicatedExpectedSP";
             default:
                 throw new IllegalArgumentException("Unrecognized table name: " + tableName);
         }

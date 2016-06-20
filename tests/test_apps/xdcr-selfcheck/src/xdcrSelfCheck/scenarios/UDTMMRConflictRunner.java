@@ -30,6 +30,11 @@ import org.voltdb.client.ClientResponse;
 import org.voltdb.client.ProcCallException;
 import xdcrSelfCheck.ClientPayloadProcessor;
 import xdcrSelfCheck.ClientThread;
+import xdcrSelfCheck.resolves.XdcrConflict;
+import xdcrSelfCheck.resolves.XdcrConflict.ACTION_TYPE;
+import xdcrSelfCheck.resolves.XdcrConflict.CONFLICT_TYPE;
+import xdcrSelfCheck.resolves.XdcrConflict.DECISION;
+import xdcrSelfCheck.resolves.XdcrConflict.DIVERGENCE;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -42,30 +47,38 @@ class UDTMMRConflictRunner extends ClientConflictRunner {
 
     @Override
     public void runScenario(final String tableName) throws Throwable {
-        try {
-            final String insertProcName = getInsertProcCall(tableName);
-            final ClientPayloadProcessor.Pair primaryPayload = processor.generateForStore();
-            final ClientPayloadProcessor.Pair secondaryPayload = processor.generateForStore();
 
+        final String insertProcName = getInsertProcCall(tableName);
+        final ClientPayloadProcessor.Pair primaryPayload = processor.generateForStore();
+        final ClientPayloadProcessor.Pair secondaryPayload = processor.generateForStore();
+
+        VoltTable referenceData;
+        try {
             CompletableFuture<VoltTable[]> primary = CompletableFuture.supplyAsync(
                     () -> {
                         try {
                             VoltTable[] result = clientThread.callStoreProcedure(primaryClient, rid, insertProcName, primaryPayload);
-                            waitForApplyBinaryLog(cid, tableName, primaryClient, 1, secondaryClient, 1);
+                            waitForApplyBinaryLog(cid, rid, tableName, primaryClient, 1, secondaryClient, 1);
                             return result;
                         } catch (Exception e) {
                             throw new CompletionException(e);
                         }
                     });
             primary.join();
+            VoltTable[] primaryResult = primary.get();
+            referenceData = primaryResult[2];
+        } catch (CompletionException ce) {
+            throw ce.getCause();
+        }
 
-            final String updateProcName = getUpdateProcCall(tableName);
-            primary = CompletableFuture.supplyAsync(
+        final String updateProcName = getUpdateProcCall(tableName);
+        final String deleteProcName = getDeleteProcCall(tableName);
+        try {
+            CompletableFuture<VoltTable[]> primary = CompletableFuture.supplyAsync(
                     () -> {
                         try {
-                            VoltTable[] result = primaryClient.callProcedure(tableName.toUpperCase() + ".delete", cid, rid).getResults();
-                            waitForApplyBinaryLog(cid, tableName, primaryClient, 0, secondaryClient, 0);
-                            return result;
+                            return clientThread.callStoreProcedure(primaryClient, rid, deleteProcName,
+                                    null, primaryPayload, "UDTMMRConflictRunner:79");
                         } catch (Exception e) {
                             throw new CompletionException(e);
                         }
@@ -74,50 +87,48 @@ class UDTMMRConflictRunner extends ClientConflictRunner {
             CompletableFuture<VoltTable[]> secondary = CompletableFuture.supplyAsync(
                     () -> {
                         try {
-                            return clientThread.callStoreProcedure(secondaryClient, rid, updateProcName, secondaryPayload);
+                            return clientThread.callStoreProcedure(secondaryClient, rid, updateProcName,
+                                    secondaryPayload, primaryPayload, "UDTMMRConflictRunner:84");
                         } catch (Exception e) {
                             throw new CompletionException(e);
                         }
                     });
 
-            try {
-                CompletableFuture.allOf(primary, secondary).join();
+            CompletableFuture.allOf(primary, secondary).join();
 
-                final String readProcName = getReadProcCall(tableName);
-                VoltTable[] primaryResult = primaryClient.callProcedure(readProcName, cid).getResults();
-                VoltTable primaryData = primaryResult[0];
-                if (primaryData.getRowCount() != 0) {
-                    throw new VoltAbortException(
-                            "The primary " + tableName + " table has more rows than expected: actual " + primaryData.getRowCount() + ", expected 0");
-                }
 
-                VoltTable[] secondaryResult = secondaryClient.callProcedure(readProcName, cid).getResults();
-                VoltTable secondaryData = secondaryResult[0];
-                if (secondaryData.getRowCount() != 0) {
-                    throw new VoltAbortException(
-                            "The secondary " + tableName + " table has more rows than expected: actual " + secondaryData.getRowCount() + ", expected 0");
-                }
-
-                // log xdcr conflict record
-            } catch (CompletionException ce) {
-                Throwable cause = ce.getCause();
-                if (cause instanceof ProcCallException) {
-                    ProcCallException pe = (ProcCallException) cause;
-                    ClientResponseImpl cri = (ClientResponseImpl) pe.getClientResponse();
-                    if ((cri.getStatus() == ClientResponse.GRACEFUL_FAILURE)) {
-                        LOG.warn("Received store procedure exceptions", pe);
-                        // no xdcr conflict
-                        return;
-                    }
-                }
-
-                throw ce;
+            VoltTable[] primaryResult = primary.get();
+            VoltTable primaryData = primaryResult[1];
+            if (primaryData.getRowCount() != 0) {
+                throw new VoltAbortException(
+                        "The primary partitioned table has more rows than expected: actual " + primaryData.getRowCount() + ", expected 0");
             }
+
+            VoltTable[] secondaryResult = secondary.get();
+            VoltTable secondaryData = secondaryResult[1];
+            verifyTableData("secondary", tableName, rid, secondaryData, 1, 0, secondaryPayload);
+
+            logXdcrConflict(primaryClient, tableName, referenceData, 0, rid,
+                    ACTION_TYPE.D, CONFLICT_TYPE.MISS, DECISION.R, DIVERGENCE.C);
+
+            logXdcrConflict(secondaryClient, tableName, secondaryData, 0, rid,
+                    ACTION_TYPE.U, CONFLICT_TYPE.MSMT, DECISION.A, DIVERGENCE.C);
         } catch (CompletionException ce) {
-            throw ce.getCause();
-        } finally {
-            resetTable(tableName);
+            Throwable cause = ce.getCause();
+            if (cause instanceof ProcCallException) {
+                ProcCallException pe = (ProcCallException) cause;
+                ClientResponseImpl cri = (ClientResponseImpl) pe.getClientResponse();
+                if ((cri.getStatus() == ClientResponse.GRACEFUL_FAILURE)) { // no xdcr conflict
+                    LOG.warn("Received IICV exceptions for cid " + cid + ", rid " + rid);
+                    logXdcrNoConflict(primaryClient, tableName, cid, rid, rid,
+                            ACTION_TYPE.D, CONFLICT_TYPE.UDTM, DECISION.R, DIVERGENCE.C);
+                    logXdcrNoConflict(secondaryClient, tableName, cid, rid, rid,
+                            ACTION_TYPE.U, CONFLICT_TYPE.UDTM, DECISION.A, DIVERGENCE.C);
+                    return;
+                }
+            }
+
+            throw ce;
         }
     }
-
 }

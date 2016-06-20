@@ -32,7 +32,7 @@ import org.voltdb.utils.MiscUtils;
 public class InsertBaseProc extends VoltProcedure {
 
     public final SQLStmt p_getCIDData = new SQLStmt(
-            "SELECT * FROM xdcr_partitioned p WHERE p.cid = ? ORDER BY p.cid, p.rid desc;");
+            "SELECT * FROM xdcr_partitioned p WHERE p.cid=? AND p.rid=? ORDER BY p.cid, p.rid desc;");
 
     public final SQLStmt p_cleanUp = new SQLStmt(
             "DELETE FROM xdcr_partitioned WHERE cid = ? and cnt < ?;");
@@ -47,13 +47,14 @@ public class InsertBaseProc extends VoltProcedure {
     protected VoltTable[] doWork(SQLStmt getCIDData, SQLStmt cleanUp, SQLStmt insert,
             byte cid, long rid, byte[] key, byte[] value, byte shouldRollback)
     {
-        voltQueueSQL(getCIDData, cid);
-        VoltTable[] results = voltExecuteSQL();
-        VoltTable data = results[0];
-
         final long clusterid = getClusterId();
         final long txnid = getUniqueId();
         final long ts = getTransactionTime().getTime();
+
+        voltQueueSQL(getCIDData, cid, rid);
+        VoltTable[] results = voltExecuteSQL();
+        VoltTable data = results[0];
+
         long prevtxnid = 0;
         long prevrid = 0;
         long cnt = 0;
@@ -83,7 +84,7 @@ public class InsertBaseProc extends VoltProcedure {
 
         voltQueueSQL(insert, clusterid, txnid, prevtxnid, ts, cid, cidallhash, rid, cnt, key, value);
         voltQueueSQL(cleanUp, cid, cnt - 10);
-        voltQueueSQL(getCIDData, cid);
+        voltQueueSQL(getCIDData, cid, rid);
         VoltTable[] retval = voltExecuteSQL();
         // Is this comment below now obsolete and can be removed?
         // Verify that our update happened.  The client is reporting data errors on this validation

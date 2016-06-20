@@ -26,18 +26,44 @@ package xdcrSelfCheck.procedures;
 import org.voltdb.SQLStmt;
 import org.voltdb.VoltProcedure;
 import org.voltdb.VoltTable;
+import org.voltdb.exceptions.SQLException;
+
+import java.util.Arrays;
 
 public class UpdateReplicatedMP extends VoltProcedure {
 
     public final SQLStmt r_getCIDData = new SQLStmt(
-            "SELECT * FROM xdcr_replicated r WHERE r.cid = ? ORDER BY r.cid, r.rid desc;");
+            "SELECT * FROM xdcr_replicated r WHERE r.cid = ? AND r.rid = ? ORDER BY r.cid, r.rid desc;");
 
     public final SQLStmt r_update = new SQLStmt(
             "UPDATE xdcr_replicated SET key=?, value=? WHERE cid=? AND rid=?;");
 
-    public VoltTable[] run(byte cid, long rid, byte[] key, byte[] value, byte rollback) {
+    public VoltTable[] run(byte cid, long rid, byte[] key, byte[] value, byte[] expectKey, byte[] expectValue, byte rollback, String scenario) {
+        voltQueueSQL(r_getCIDData, cid, rid);
+        VoltTable[] results = voltExecuteSQL();
+        VoltTable data = results[0];
+        data.advanceRow();
+        if (data.getRowCount() == 0) {
+            throw new SQLException(getClass().getName() +
+                    " No record in table xdcr_partitioned for cid " + cid + ", rid " + rid + ", scenario " + scenario);
+        }
+
+        byte[] extKey = data.getVarbinary("key");
+        if (! Arrays.equals(extKey, expectKey)) {
+            throw new SQLException(getClass().getName() +
+                    " existing key " + extKey + " does not match expected key " + expectKey +
+                    " for cid " + cid + ", rid " + rid + ", scenario " + scenario);
+        }
+
+        byte[] extValue = data.getVarbinary("value");
+        if (! Arrays.equals(extValue, expectValue)) {
+            throw new SQLException(getClass().getName() +
+                    " existing value " + extValue + " does not match expected key " + expectValue +
+                    " for cid " + cid + ", rid " + rid + ", scenario " + scenario);
+        }
+
         voltQueueSQL(r_update, key, value, cid, rid);
-        voltQueueSQL(r_getCIDData, cid);
+        voltQueueSQL(r_getCIDData, cid, rid);
         return voltExecuteSQL(true);
     }
 }

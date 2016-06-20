@@ -58,6 +58,7 @@ import org.voltdb.client.ClientStatusListenerExt;
 import org.voltdb.client.ProcCallException;
 import org.voltdb.client.ProcedureCallback;
 import org.voltdb.utils.MiscUtils;
+import xdcrSelfCheck.resolves.ConflictResolveChecker;
 
 public class Benchmark {
 
@@ -151,6 +152,12 @@ public class Benchmark {
 
         @Option(desc = "Maximum TPS rate for benchmark.")
         int ratelimit = Integer.MAX_VALUE;
+
+        @Option(desc = "Primary cluster voltdbroot")
+        String primaryvoltdbroot = "./voltxdcr1";
+
+        @Option(desc = "Secondary cluster voltdbroot")
+        String secondaryvoltdbroot = "./voltxdcr2";
 
         @Override
         public void validate() {
@@ -641,6 +648,10 @@ public class Benchmark {
         log.info("All threads started...");
 
         latch.await();
+
+        ConflictResolveChecker checker = new ConflictResolveChecker(primaryClient, secondaryClient,
+                config.primaryvoltdbroot, config.secondaryvoltdbroot);
+        checker.runResolveVerification();
 
         shutdow();
     }

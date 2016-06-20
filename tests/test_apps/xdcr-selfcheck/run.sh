@@ -44,8 +44,9 @@ function srccompile() {
     mkdir -p obj
     javac -classpath $CLASSPATH -d obj \
         src/xdcrSelfCheck/*.java \
+        src/xdcrSelfCheck/procedures/*.java \
         src/xdcrSelfCheck/scenarios/*.java \
-        src/xdcrSelfCheck/procedures/*.java
+        src/xdcrSelfCheck/resolves/*.java
     # stop if compilation fails
     if [ $? != 0 ]; then exit; fi
 }
@@ -117,12 +118,14 @@ function async-xdcr-bench() {
         --minvaluesize=32 \
         --maxvaluesize=32 \
         --entropy=127 \
-        --progresstimeout=20 \
-        --usecompression=false
+        --progresstimeout=120 \
+        --usecompression=false \
+        --primaryvoltdbroot="./voltxdcr1" \
+        --secondaryvoltdbroot="./voltxdcr2"
 }
 
 function help() {
-    echo "Usage: ./run.sh {clean|catalog|xdcr1|xdcr2|help}"
+    echo "Usage: ./run.sh {clean|catalog|xdcr1|xdcr2|client|help}"
 }
 
 # Run the target passed as the first arg on the command line
