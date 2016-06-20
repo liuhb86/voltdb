@@ -46,7 +46,6 @@ import java.util.List;
 
 import org.voltdb.expressions.AbstractExpression;
 import org.voltdb.expressions.TupleValueExpression;
-import org.voltdb.expressions.WindowedExpression;
 import org.voltdb.plannodes.AbstractPlanNode;
 import org.voltdb.plannodes.NestLoopPlanNode;
 import org.voltdb.plannodes.NodeSchema;
@@ -103,7 +102,6 @@ public class TestWindowedFunctions extends PlannerTestCase {
             // Then check that the TVEs all make sense.
             //
             SchemaColumn column = schema.getColumns().get(0);
-            assertTrue(column.getExpression() instanceof WindowedExpression);
             assertEquals("ARANK", column.getColumnAlias());
             assertEquals(2, pbPlanNode.getNumberOfPartitionByExpressions());
             validateTVEs(input_schema, pbPlanNode);
@@ -115,8 +113,14 @@ public class TestWindowedFunctions extends PlannerTestCase {
     public void validateTVEs(NodeSchema input_schema, PartitionByPlanNode pbPlanNode) {
         List<AbstractExpression> tves = pbPlanNode.getAllTVEs();
         List<SchemaColumn> columns = input_schema.getColumns();
-        for (AbstractExpression ae : tves) {
+        for (int idx = 0; idx < tves.size(); idx += 1) {
+            AbstractExpression ae = tves.get(idx);
             TupleValueExpression tve = (TupleValueExpression)ae;
+            // The tve with column index 0 is the aggregate column,
+            // and is not interesting to us.
+            if (tve.getColumnIndex() == 0) {
+                continue;
+            }
             assertTrue(0 <= tve.getColumnIndex() && tve.getColumnIndex() < columns.size());
             SchemaColumn col = columns.get(tve.getColumnIndex());
             String msg = String.format("TVE %d, COL %s: ",
@@ -167,7 +171,6 @@ public class TestWindowedFunctions extends PlannerTestCase {
 
             NodeSchema  schema = partitionByPlanNode.getOutputSchema();
             SchemaColumn column = schema.getColumns().get(0);
-            assertTrue(column.getExpression() instanceof WindowedExpression);
             assertEquals("ARANK", column.getColumnAlias());
 
             validateTVEs(input_schema, (PartitionByPlanNode)partitionByPlanNode);

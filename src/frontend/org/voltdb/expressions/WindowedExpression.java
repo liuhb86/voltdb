@@ -51,9 +51,9 @@ public class WindowedExpression extends AbstractExpression {
 
     public static SortDirectionType DEFAULT_ORDER_BY_DIRECTION = SortDirectionType.ASC;
 
-    private List<AbstractExpression> m_partitionByExpressions = new ArrayList<>();
-    private List<AbstractExpression> m_orderByExpressions = new ArrayList<>();
-    private List<SortDirectionType>  m_orderByDirections = new ArrayList<>();
+    private List<AbstractExpression> m_partitionByExpressions    = new ArrayList<>();
+    private List<AbstractExpression> m_orderByExpressions        = new ArrayList<>();
+    private List<SortDirectionType>  m_orderByDirections         = new ArrayList<>();
 
     public WindowedExpression() {
         //

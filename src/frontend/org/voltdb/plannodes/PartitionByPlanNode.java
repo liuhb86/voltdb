@@ -22,10 +22,12 @@ import java.util.List;
 import org.json_voltpatches.JSONException;
 import org.json_voltpatches.JSONObject;
 import org.json_voltpatches.JSONStringer;
+import org.voltdb.VoltType;
 import org.voltdb.catalog.Database;
 import org.voltdb.expressions.AbstractExpression;
 import org.voltdb.expressions.TupleValueExpression;
 import org.voltdb.expressions.WindowedExpression;
+import org.voltdb.types.ExpressionType;
 import org.voltdb.types.PlanNodeType;
 import org.voltdb.types.SortDirectionType;
 
@@ -36,7 +38,14 @@ import org.voltdb.types.SortDirectionType;
  */
 public class PartitionByPlanNode extends AbstractPlanNode {
     public enum Members {
-        WINDOWED_COLUMN
+        AGGREGATE_OPERATION,
+        AGGREGATE_COLUMN_NAME,
+        AGGREGATE_COLUMN_ALIAS,
+        AGGREGATE_TABLE_NAME,
+        AGGREGATE_TABLE_ALIAS,
+        AGGREGATE_VALUE_TYPE,
+        AGGREGATE_VALUE_SIZE,
+        PARTITION_BY_EXPRESSIONS
     };
 
     public PartitionByPlanNode() {
@@ -85,16 +94,11 @@ public class PartitionByPlanNode extends AbstractPlanNode {
      */
     public List<AbstractExpression> getAllTVEs() {
         List<AbstractExpression> tves =  new ArrayList<AbstractExpression>();
-        // Get all the partition by expressions.
-        for (AbstractExpression ae : getWindowedExpression().getPartitionByExpressions()) {
-            tves.addAll(ae.findAllSubexpressionsOfClass(TupleValueExpression.class));
-        }
-        // Get all the order by expressions.
-        for (AbstractExpression ae : getWindowedExpression().getOrderByExpressions()) {
-            tves.addAll(ae.findAllSubexpressionsOfClass(TupleValueExpression.class));
-        }
-        // Get everything else.
-        for (SchemaColumn col : getOutputSchema().getColumns()) {
+        // Get everything in the out columns but the aggregate column.  The aggregate
+        // column's column index is not helpful.
+        List<SchemaColumn> outputColumns = getOutputSchema().getColumns();
+        for (int idx = 1; idx < outputColumns.size(); idx += 1) {
+            SchemaColumn col = outputColumns.get(idx);
             AbstractExpression expr = col.getExpression();
             if (col != null) {
                 tves.addAll(expr.findAllSubexpressionsOfClass(TupleValueExpression.class));
@@ -104,10 +108,8 @@ public class PartitionByPlanNode extends AbstractPlanNode {
     }
 
     /**
-     * Generate the output schema.  This node will already have
-     * an output schema with one column, which is a windowed aggregate
-     * expression.  But we need to add the output schema of the one
-     * child node.
+     * Generate the output schema.  We need to create the aggregate column,
+     * and then we need to copy the columns of the input schema to the output schema.
      */
     @Override
     public void generateOutputSchema(Database db) {
@@ -117,12 +119,23 @@ public class PartitionByPlanNode extends AbstractPlanNode {
         m_children.get(0).generateOutputSchema(db);
 
         // Now, generate the output columns for this plan node.  First
-        // add the windowed column, and then add the input columns.
-        // The output schema must have one column, which
-        // is an windowed expression.
+        // add a column for the windowed output.  Then add the input columns.
         assert(m_outputSchema != null);
         assert(0 == m_outputSchema.getColumns().size());
-        m_outputSchema.addColumn(m_windowedSchemaColumn);
+        // We don't serialize the column and table names and aliases.
+        // The column indices are all -1 for the aggregate column, since
+        // we are going to compute it.
+        TupleValueExpression tve = new TupleValueExpression();
+        tve.setValueSize(m_aggregateValueSize);
+        tve.setValueType(m_aggregateValueType);
+        // This is generated, so it has no column index in the output schema.
+        tve.setColumnIndex(-1);
+        SchemaColumn col = new SchemaColumn(m_aggregateTableName,
+                                            m_aggregateTableAlias,
+                                            m_aggregateTableName,
+                                            m_aggregateColumnAlias,
+                                            tve);
+        m_outputSchema.addColumn(col);
         m_hasSignificantOutputSchema = true;
         NodeSchema inputSchema = getChild(0).getOutputSchema();
         assert(inputSchema != null);
@@ -173,63 +186,99 @@ public class PartitionByPlanNode extends AbstractPlanNode {
     @Override
     public void toJSONString(JSONStringer stringer) throws JSONException {
         super.toJSONString(stringer);
-        if (m_windowedSchemaColumn != null) {
-            stringer.key(Members.WINDOWED_COLUMN.name());
-            m_windowedSchemaColumn.toJSONString(stringer, true);
+        stringer.key(Members.AGGREGATE_OPERATION.name())
+                .value(m_aggregateOperation.getValue());
+        stringer.key(Members.PARTITION_BY_EXPRESSIONS.name());
+        stringer.array();
+        for (AbstractExpression expr : m_partitionByExpressions) {
+            stringer.object();
+            expr.toJSONString(stringer);
+            stringer.endObject();
         }
+        stringer.endArray();
+        // Save the information associated with the windowed column.
+        stringer.key(Members.AGGREGATE_TABLE_NAME.name())
+                .value(m_aggregateTableName)
+                .key(Members.AGGREGATE_TABLE_ALIAS.name())
+                .value(m_aggregateTableAlias)
+                .key(Members.AGGREGATE_COLUMN_NAME.name())
+                .value(m_aggregateColumnName)
+                .key(Members.AGGREGATE_COLUMN_ALIAS.name())
+                .value(m_aggregateColumnAlias)
+                .key(Members.AGGREGATE_VALUE_TYPE.name())
+                .value(m_aggregateValueType.name())
+                .key(Members.AGGREGATE_VALUE_SIZE.name())
+                .value(m_aggregateValueSize);
     }
 
     @Override
     public void loadFromJSONObject(JSONObject jobj, Database db) throws JSONException {
-        JSONObject windowedColumn = (JSONObject) jobj.get(Members.WINDOWED_COLUMN.name());
-        if (windowedColumn != null) {
-            m_windowedSchemaColumn = SchemaColumn.fromJSONObject(windowedColumn);
-        }
-    }
-
-    private WindowedExpression getWindowedExpression() {
-        assert(m_windowedSchemaColumn != null);
-        AbstractExpression abstractSE = m_windowedSchemaColumn.getExpression();
-        assert(abstractSE instanceof WindowedExpression);
-        return (WindowedExpression)abstractSE;
+        helpLoadFromJSONObject(jobj, db);
+        int aggop = jobj.getInt(Members.AGGREGATE_OPERATION.name());
+        m_aggregateOperation = ExpressionType.get(aggop);
+        AbstractExpression.loadFromJSONArrayChild(m_partitionByExpressions,
+                                                  jobj,
+                                                  Members.PARTITION_BY_EXPRESSIONS.name(),
+                                                  null);
+        // Set up the windowed column.
+        m_aggregateTableName = jobj.getString(Members.AGGREGATE_TABLE_NAME.name());
+        m_aggregateTableAlias = jobj.getString(Members.AGGREGATE_TABLE_ALIAS.name());
+        m_aggregateColumnName = jobj.getString(Members.AGGREGATE_COLUMN_NAME.name());
+        m_aggregateColumnAlias = jobj.getString(Members.AGGREGATE_COLUMN_ALIAS.name());
+        m_aggregateValueType = VoltType.typeFromString(jobj.getString(Members.AGGREGATE_VALUE_TYPE.name()));
+        m_aggregateValueSize = jobj.getInt(Members.AGGREGATE_VALUE_SIZE.name());
     }
 
     public AbstractExpression getPartitionByExpression(int idx) {
-        WindowedExpression we = getWindowedExpression();
-        return we.getPartitionByExpressions().get(idx);
+        return m_partitionByExpressions.get(idx);
     }
 
     public int getNumberOfPartitionByExpressions() {
-        return getWindowedExpression().getPartitionbySize();
+        return m_partitionByExpressions.size();
     }
 
     public AbstractExpression getSortExpression(int idx) {
-        WindowedExpression we = getWindowedExpression();
-        return we.getOrderByExpressions().get(idx);
+        return m_orderByExpressions.get(idx);
     }
 
     public SortDirectionType getSortDirection(int idx) {
-        WindowedExpression we = getWindowedExpression();
-        return (we.getOrderByDirections().get(idx));
+        return m_orderBySortDirections.get(idx);
     }
 
     public int numberSortExpressions() {
-        WindowedExpression we = getWindowedExpression();
-        return we.getOrderbySize();
+        return m_orderByExpressions.size();
     }
 
     public void setWindowedColumn(SchemaColumn col) {
-        m_windowedSchemaColumn = col;
+        WindowedExpression winex = (WindowedExpression)col.getExpression();
+        m_aggregateTableName = col.getTableName();
+        m_aggregateTableAlias = col.getTableAlias();
+        m_aggregateColumnName = col.getColumnName();
+        m_aggregateColumnAlias = col.getColumnAlias();
+        m_aggregateOperation = winex.getExpressionType();
+        m_partitionByExpressions = winex.getPartitionByExpressions();
+        m_orderByExpressions = winex.getOrderByExpressions();
+        m_orderBySortDirections = winex.getOrderByDirections();
+        m_aggregateValueType = winex.getValueType();
+        m_aggregateValueSize = winex.getValueSize();
     }
 
     @Override
     /**
-     * This is an AggregatePlanNode.  Normally these don't need projection
-     * nodes, but this one does.
+     * This node needs a projection node.
      */
     public boolean planNodeClassNeedsProjectionNode() {
         return true;
     }
 
-    private SchemaColumn       m_windowedSchemaColumn = null;
+    private ExpressionType           m_aggregateOperation     = null;
+    private List<AbstractExpression> m_partitionByExpressions = new ArrayList<>();
+    private List<AbstractExpression> m_orderByExpressions     = new ArrayList<>();
+    private List<SortDirectionType>  m_orderBySortDirections  = new ArrayList<>();
+    private String                   m_aggregateTableName;
+    private String                   m_aggregateTableAlias;
+    private String                   m_aggregateColumnName;
+    private String                   m_aggregateColumnAlias;
+    private VoltType                 m_aggregateValueType;
+    private int                      m_aggregateValueSize;
 }

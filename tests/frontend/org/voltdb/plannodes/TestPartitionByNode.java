@@ -112,23 +112,13 @@ public class TestPartitionByNode extends TestCase {
             assertTrue(ae instanceof TupleValueExpression);
             TupleValueExpression tve2 = (TupleValueExpression)ae2;
             TupleValueExpression tve = (TupleValueExpression)ae;
-            // Not everything gets serialized.  We don't serialize all
-            // the column names, for example.  We also don't serialize
-            // the order by columns, as these are in an order by node
-            // in the plan.  But the metadata and the column indices need
+            // Not everything gets serialized in TVEs.  The names don't
+            // get saved.  But the metadata and the column indices need
             // to match.
-            assertEquals(tve.getValueSize(), tve2.getValueSize());
-            assertEquals(tve.getValueType(), tve2.getValueType());
+            assertEquals(tve.getValueSize(),   tve2.getValueSize());
+            assertEquals(tve.getValueType(),   tve2.getValueType());
             assertEquals(tve.getColumnIndex(), tve2.getColumnIndex());
         }
-        assertEquals(SortDirectionType.ASC,  pn.getSortDirection(0));
-        assertEquals(SortDirectionType.DESC, pn.getSortDirection(1));
-        assertEquals(VoltType.FLOAT,             pn.getSortExpression(0).getValueType());
-        assertEquals(8,                          pn.getSortExpression(0).getValueSize());
-        assertEquals(ExpressionType.VALUE_TUPLE, pn.getSortExpression(0).getExpressionType());
-        assertEquals(VoltType.INTEGER,           pn.getSortExpression(1).getValueType());
-        assertEquals(4,                          pn.getSortExpression(1).getValueSize());
-        assertEquals(ExpressionType.VALUE_TUPLE, pn.getSortExpression(1).getExpressionType());
     }
 
     private WindowedExpression makeWindowedExpression() {
@@ -149,6 +139,8 @@ public class TestPartitionByNode extends TestCase {
                                                        Arrays.asList(tve3, tve4),
                                                        Arrays.asList(SortDirectionType.ASC, SortDirectionType.DESC),
                                                        m_voltdb.getDatabase(), true, false);
+        we.setValueType(VoltType.BIGINT);
+        we.setValueSize(8);
         return we;
     }
 }

@@ -67,6 +67,6 @@ std::string PartitionByPlanNode::debugInfo(const std::string &spacer) const
     for (int idx = 0; idx < m_sortExpressions.size(); idx += 1) {
         buffer << m_sortExpressions[idx]->debug(spacer);
     }
-        return buffer.str();
+    return buffer.str();
 }
 }

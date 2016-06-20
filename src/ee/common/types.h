@@ -313,6 +313,11 @@ enum ExpressionType {
     EXPRESSION_TYPE_AGGREGATE_VALS_TO_HYPERLOGLOG   = 47,
     EXPRESSION_TYPE_AGGREGATE_HYPERLOGLOGS_TO_CARD  = 48,
 
+    // ----------------------------
+    // Windowed Aggregates.
+    // ----------------------------
+    EXPRESSION_TYPE_AGGREGATE_WINDOWED_RANK         = 70,
+
     // -----------------------------
     // Functions
     // -----------------------------

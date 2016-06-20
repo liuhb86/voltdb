@@ -274,6 +274,7 @@ CTX.INPUT['executors'] = """
  nestloopexecutor.cpp
  nestloopindexexecutor.cpp
  orderbyexecutor.cpp
+ PartitionByExecutor.cpp
  projectionexecutor.cpp
  receiveexecutor.cpp
  sendexecutor.cpp
