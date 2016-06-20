@@ -123,13 +123,13 @@ public class PartitionByPlanNode extends AbstractPlanNode {
         assert(m_outputSchema != null);
         assert(0 == m_outputSchema.getColumns().size());
         // We don't serialize the column and table names and aliases.
-        // The column indices are all -1 for the aggregate column, since
-        // we are going to compute it.
+        // The column indices are 0 for the aggregate column, but they
+        // don't actually matter, because we are going to compute it.
         TupleValueExpression tve = new TupleValueExpression();
         tve.setValueSize(m_aggregateValueSize);
         tve.setValueType(m_aggregateValueType);
         // This is generated, so it has no column index in the output schema.
-        tve.setColumnIndex(-1);
+        tve.setColumnIndex(0);
         SchemaColumn col = new SchemaColumn(m_aggregateTableName,
                                             m_aggregateTableAlias,
                                             m_aggregateTableName,
@@ -183,11 +183,21 @@ public class PartitionByPlanNode extends AbstractPlanNode {
         return sb.toString();
     }
 
+    private void saveStringAsJSON(JSONStringer stringer, String name, String key) throws JSONException {
+        if ((name != null) && (name.length() > 0)) {
+            stringer.key(key).value(name);
+        }
+    }
+
+    private void saveIntAsJSON(JSONStringer stringer, int value, String key) throws JSONException {
+        stringer.key(key).value(value);
+    }
+
     @Override
     public void toJSONString(JSONStringer stringer) throws JSONException {
         super.toJSONString(stringer);
         stringer.key(Members.AGGREGATE_OPERATION.name())
-                .value(m_aggregateOperation.getValue());
+                .value(m_aggregateOperation);
         stringer.key(Members.PARTITION_BY_EXPRESSIONS.name());
         stringer.array();
         for (AbstractExpression expr : m_partitionByExpressions) {
@@ -197,18 +207,35 @@ public class PartitionByPlanNode extends AbstractPlanNode {
         }
         stringer.endArray();
         // Save the information associated with the windowed column.
-        stringer.key(Members.AGGREGATE_TABLE_NAME.name())
-                .value(m_aggregateTableName)
-                .key(Members.AGGREGATE_TABLE_ALIAS.name())
-                .value(m_aggregateTableAlias)
-                .key(Members.AGGREGATE_COLUMN_NAME.name())
-                .value(m_aggregateColumnName)
-                .key(Members.AGGREGATE_COLUMN_ALIAS.name())
-                .value(m_aggregateColumnAlias)
-                .key(Members.AGGREGATE_VALUE_TYPE.name())
-                .value(m_aggregateValueType.name())
-                .key(Members.AGGREGATE_VALUE_SIZE.name())
-                .value(m_aggregateValueSize);
+        saveStringAsJSON(stringer, m_aggregateTableName,   Members.AGGREGATE_TABLE_NAME.name());
+        saveStringAsJSON(stringer, m_aggregateTableAlias,  Members.AGGREGATE_TABLE_ALIAS.name());
+        saveStringAsJSON(stringer, m_aggregateColumnName,  Members.AGGREGATE_COLUMN_NAME.name());
+        saveStringAsJSON(stringer, m_aggregateColumnAlias, Members.AGGREGATE_COLUMN_ALIAS.name());
+        saveIntAsJSON   (stringer, m_aggregateValueType.getValue(),
+                                                           Members.AGGREGATE_VALUE_TYPE.name());
+        saveIntAsJSON   (stringer, m_aggregateValueSize,   Members.AGGREGATE_VALUE_SIZE.name());
+    }
+
+    private String chooseString(JSONObject jobj, String key) throws JSONException {
+        if (jobj.has(key)) {
+            return jobj.getString(key);
+        }
+        return null;
+    }
+
+    private VoltType chooseType(JSONObject jobj, String key) throws JSONException {
+        if (jobj.has(key)) {
+            int val = jobj.getInt(key);
+            return VoltType.get((byte)val);
+        }
+        return null;
+    }
+
+    private int chooseInt(JSONObject jobj, String key) throws JSONException {
+        if (jobj.has(key)) {
+            return jobj.getInt(key);
+        }
+        return -1;
     }
 
     @Override
@@ -220,13 +247,24 @@ public class PartitionByPlanNode extends AbstractPlanNode {
                                                   jobj,
                                                   Members.PARTITION_BY_EXPRESSIONS.name(),
                                                   null);
-        // Set up the windowed column.
-        m_aggregateTableName = jobj.getString(Members.AGGREGATE_TABLE_NAME.name());
-        m_aggregateTableAlias = jobj.getString(Members.AGGREGATE_TABLE_ALIAS.name());
-        m_aggregateColumnName = jobj.getString(Members.AGGREGATE_COLUMN_NAME.name());
-        m_aggregateColumnAlias = jobj.getString(Members.AGGREGATE_COLUMN_ALIAS.name());
-        m_aggregateValueType = VoltType.typeFromString(jobj.getString(Members.AGGREGATE_VALUE_TYPE.name()));
-        m_aggregateValueSize = jobj.getInt(Members.AGGREGATE_VALUE_SIZE.name());
+        // Read the windowed column metadata.
+        m_aggregateTableName       = chooseString(jobj, Members.AGGREGATE_TABLE_NAME.name());
+        m_aggregateTableAlias      = chooseString(jobj, Members.AGGREGATE_TABLE_ALIAS.name());
+        m_aggregateColumnName      = chooseString(jobj, Members.AGGREGATE_COLUMN_NAME.name());
+        m_aggregateColumnAlias     = chooseString(jobj, Members.AGGREGATE_COLUMN_ALIAS.name());
+        m_aggregateValueType       = chooseType  (jobj, Members.AGGREGATE_VALUE_TYPE.name());
+        m_aggregateValueSize       = chooseInt   (jobj, Members.AGGREGATE_VALUE_SIZE.name());
+        if (jobj.has(Members.AGGREGATE_VALUE_TYPE.name())) {
+            int valType = jobj.getInt(Members.AGGREGATE_VALUE_TYPE.name());
+            m_aggregateValueType = VoltType.get((byte)valType);
+        }
+        if (jobj.has(Members.AGGREGATE_VALUE_SIZE.name())) {
+            m_aggregateValueSize = jobj.getInt(Members.AGGREGATE_VALUE_SIZE.name());
+        }
+        assert(0 <= m_aggregateValueSize);
+        assert(m_aggregateValueType != null);
+        assert(m_aggregateTableAlias != null || m_aggregateTableName != null);
+        assert(m_aggregateColumnAlias != null || m_aggregateColumnName != null);
     }
 
     public AbstractExpression getPartitionByExpression(int idx) {

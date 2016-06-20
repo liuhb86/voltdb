@@ -222,6 +222,10 @@ public enum ExpressionType {
         return m_symbol;
     }
 
+    public boolean isWindowedExpression() {
+        return getExpressionClass() == WindowedExpression.class;
+    }
+
     public boolean isAggregateExpression() {
         return getExpressionClass() == AggregateExpression.class;
     }

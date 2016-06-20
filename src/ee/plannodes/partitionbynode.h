@@ -16,32 +16,49 @@
  */
 #ifndef SRC_EE_PLANNODES_PARTITIONBYNODE_H_
 #define SRC_EE_PLANNODES_PARTITIONBYNODE_H_
-#include "aggregatenode.h"
+#include "abstractplannode.h"
 
 namespace voltdb {
-class PartitionByPlanNode : public AggregatePlanNode {
+/**
+ * In the EE, a PartitionByPlanNode is considerably simpler than the
+ * Java version, since we don't have to serialize it.  We just have
+ * to deserialize them.  So we don't need to remember the table and
+ * column names and aliases.
+ */
+class PartitionByPlanNode : public AbstractPlanNode {
 public:
     PartitionByPlanNode()
-        : AggregatePlanNode(PLAN_NODE_TYPE_HASHAGGREGATE) {
+        : m_aggregateOperation(EXPRESSION_TYPE_INVALID) {
     }
     ~PartitionByPlanNode();
 
     PlanNodeType getPlanNodeType() const;
     std::string debugInfo(const std::string &spacer) const;
 
-    const std::vector<AbstractExpression*> getSortExpressions() const {
-        return m_sortExpressions;
+    const std::vector<AbstractExpression*> getPartitionExpressions() const {
+        return m_partitionExpressions;
     }
 
-    const std::vector<SortDirectionType> getSortDirections() const {
-        return m_sortDirections;
+    ExpressionType getAggregateOperation() const {
+        return m_aggregateOperation;
     }
+
+    ValueType getValueType() const {
+        return m_valueType;
+    }
+
+    int getValueSize() const {
+        return m_valueSize;
+    }
+
 protected:
     void loadFromJSONObject(PlannerDomValue obj);
 
 private:
-    OwningExpressionVector          m_sortExpressions;
-    std::vector<SortDirectionType>  m_sortDirections;
+    OwningExpressionVector          m_partitionExpressions;
+    ExpressionType                  m_aggregateOperation;
+    ValueType                       m_valueType;
+    int                             m_valueSize;
 };
 }
 #endif /* SRC_EE_PLANNODES_PARTITIONBYNODE_H_ */

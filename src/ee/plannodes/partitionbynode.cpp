@@ -34,38 +34,28 @@ PlanNodeType PartitionByPlanNode::getPlanNodeType() const
 
 void PartitionByPlanNode::loadFromJSONObject(PlannerDomValue obj)
 {
-    // Start with the base class.
-    AggregatePlanNode::loadFromJSONObject(obj);
-    // Read the sort expressions and directions.
-    PlannerDomValue sortByColumnArray = obj.valueForKey("SORT_COLUMNS");
-    for (int idx = 0; idx < sortByColumnArray.arrayLen(); idx += 1) {
-        PlannerDomValue sortColumnValue = sortByColumnArray.valueAtIndex(idx);
-        if (sortColumnValue.hasNonNullKey("SORT_EXPRESSION")) {
-            PlannerDomValue exprDom = sortColumnValue.valueForKey("SORT_EXPRESSION");
-            m_sortExpressions.push_back(AbstractExpression::buildExpressionTree(exprDom));
-        } else {
-            throw SerializableEEException(VOLT_EE_EXCEPTION_TYPE_EEEXCEPTION,
-                                                       "PartitionByPlanNode::loadFromJSONObject:"
-                                                       " Missing sort expression.");
-        }
-        if (sortColumnValue.hasNonNullKey("SORT_DIRECTION")) {
-            std::string dirStr = sortColumnValue.valueForKey("SORT_DIRECTION").asStr();
-            m_sortDirections.push_back(stringToSortDirection(dirStr));
-        } else {
-            throw SerializableEEException(VOLT_EE_EXCEPTION_TYPE_EEEXCEPTION,
-                                                       "PartitionByPlanNode::loadFromJSONObject:"
-                                                       " Missing sort direction.");
-        }
+    PlannerDomValue partitionExprs = obj.valueForKey("PARTITION_BY_EXPRESSIONS");
+    for (int idx = 0; idx < partitionExprs.arrayLen(); idx += 1) {
+        PlannerDomValue exprDom = partitionExprs.valueAtIndex(idx);
+        m_partitionExpressions.push_back(AbstractExpression::buildExpressionTree(exprDom));
     }
+    std::string valStr;
+    PlannerDomValue aggOpObj = obj.valueForKey("AGGREGATE_OPERATION");
+    valStr = aggOpObj.asStr();
+    m_aggregateOperation = stringToExpression(valStr);
+    PlannerDomValue aggValObj = obj.valueForKey("AGGREGATE_VALUE_TYPE");
+    valStr = aggValObj.asStr();
+    m_valueType = stringToValue(valStr);
+    PlannerDomValue aggValSizeObj = obj.valueForKey("AGGREGATE_VALUE_SIZE");
+    m_valueSize = aggValSizeObj.asInt();
 }
 
 std::string PartitionByPlanNode::debugInfo(const std::string &spacer) const
 {
     std::ostringstream buffer;
     buffer << "PartitionByPlanNode: ";
-    buffer << AggregatePlanNode::debug(spacer);
-    for (int idx = 0; idx < m_sortExpressions.size(); idx += 1) {
-        buffer << m_sortExpressions[idx]->debug(spacer);
+    for (int idx = 0; idx < m_partitionExpressions.size(); idx += 1) {
+        buffer << m_partitionExpressions[idx]->debug(spacer);
     }
     return buffer.str();
 }

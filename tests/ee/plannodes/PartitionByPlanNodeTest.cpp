@@ -55,44 +55,73 @@ using namespace voltdb;
 
 namespace {
 const char *jsonStrings[] = {
-        "{\n"
-        "    \"CHILDREN_IDS\": [3],\n"
-        "    \"ID\": 2,\n"
-        "    \"OUTPUT_SCHEMA\": [\n"
-        "        {\n"
-        "            \"COLUMN_NAME\": \"C1\",\n"
-        "            \"EXPRESSION\": {\n"
-        "                \"COLUMN_IDX\": 0,\n"
-        "                \"TYPE\": 70,\n"
-        "                \"VALUE_TYPE\": 6\n"
-        "            }\n"
-        "        },\n"
-        "        {\n"
-        "            \"COLUMN_NAME\": \"ID\",\n"
-        "            \"EXPRESSION\": {\n"
-        "                \"COLUMN_IDX\": 0,\n"
-        "                \"TYPE\": 32,\n"
-        "                \"VALUE_TYPE\": 5\n"
-        "            }\n"
-        "        }\n"
-        "    ],\n"
-        "    \"PLAN_NODE_TYPE\": \"PARTITIONBY\",\n"
-        "    \"WINDOWED_COLUMN\": {\n"
-        "        \"COLUMN_NAME\": \"C1\",\n"
-        "        \"EXPRESSION\": {\n"
-        "            \"PARTITION_BY_EXPRESSIONS\": [{\n"
-        "                \"COLUMN_IDX\": 0,\n"
-        "                \"TYPE\": 32,\n"
-        "                \"VALUE_TYPE\": 5\n"
-        "            }],\n"
-        "            \"TYPE\": 70,\n"
-        "            \"VALUE_TYPE\": 6\n"
-        "        }\n"
-        "    }\n"
-        "}\n",
-        (const char *)0
+                "{\n"
+                "    \"AGGREGATE_COLUMN_ALIAS\": \"ARANK\",\n"
+                "    \"AGGREGATE_OPERATION\": \"AGGREGATE_WINDOWED_RANK\",\n"
+                "    \"AGGREGATE_TABLE_ALIAS\": \"VOLT_TEMP_TABLE\",\n"
+                "    \"AGGREGATE_TABLE_NAME\": \"VOLT_TEMP_TABLE\",\n"
+                "    \"AGGREGATE_VALUE_SIZE\": 8,\n"
+                "    \"AGGREGATE_VALUE_TYPE\": 6,\n"
+                "    \"CHILDREN_IDS\": [3],\n"
+                "    \"ID\": 2,\n"
+                "    \"OUTPUT_SCHEMA\": [\n"
+                "        {\n"
+                "            \"COLUMN_NAME\": \"ARANK\",\n"
+                "            \"EXPRESSION\": {\n"
+                "                \"COLUMN_IDX\": 0,\n"
+                "                \"TYPE\": 32,\n"
+                "                \"VALUE_TYPE\": 6\n"
+                "            }\n"
+                "        },\n"
+                "        {\n"
+                "            \"COLUMN_NAME\": \"A\",\n"
+                "            \"EXPRESSION\": {\n"
+                "                \"COLUMN_IDX\": 0,\n"
+                "                \"TYPE\": 32,\n"
+                "                \"VALUE_TYPE\": 5\n"
+                "            }\n"
+                "        },\n"
+                "        {\n"
+                "            \"COLUMN_NAME\": \"A\",\n"
+                "            \"EXPRESSION\": {\n"
+                "                \"COLUMN_IDX\": 1,\n"
+                "                \"TYPE\": 32,\n"
+                "                \"VALUE_TYPE\": 5\n"
+                "            }\n"
+                "        },\n"
+                "        {\n"
+                "            \"COLUMN_NAME\": \"B\",\n"
+                "            \"EXPRESSION\": {\n"
+                "                \"COLUMN_IDX\": 2,\n"
+                "                \"TYPE\": 32,\n"
+                "                \"VALUE_TYPE\": 5\n"
+                "            }\n"
+                "        },\n"
+                "        {\n"
+                "            \"COLUMN_NAME\": \"B\",\n"
+                "            \"EXPRESSION\": {\n"
+                "                \"COLUMN_IDX\": 3,\n"
+                "                \"TYPE\": 32,\n"
+                "                \"VALUE_TYPE\": 5\n"
+                "            }\n"
+                "        }\n"
+                "    ],\n"
+                "    \"PARTITION_BY_EXPRESSIONS\": [\n"
+                "        {\n"
+                "            \"COLUMN_IDX\": 0,\n"
+                "            \"TYPE\": 32,\n"
+                "            \"VALUE_TYPE\": 5\n"
+                "        },\n"
+                "        {\n"
+                "            \"COLUMN_IDX\": 1,\n"
+                "            \"TYPE\": 32,\n"
+                "            \"VALUE_TYPE\": 5\n"
+                "        }\n"
+                "    ],\n"
+                "    \"PLAN_NODE_TYPE\": \"PARTITIONBY\"\n"
+                "}\n",
+                (const char *)0
 };
-}
 
 class PartitionByPlanNodeTest : public Test {
 public:
@@ -106,35 +135,29 @@ TEST_F(PartitionByPlanNodeTest, TestJSON)
     for (int jsonIdx = 0; jsonStrings[jsonIdx]; jsonIdx += 1) {
         const char *jsonString = jsonStrings[jsonIdx];
         PlannerDomRoot root(jsonString);
+        if (root.isNull()) {
+            EXPECT_TRUE(false);
+            return;
+        }
         PlannerDomValue obj(root.rootObject());
         boost::shared_ptr<voltdb::PartitionByPlanNode> pn(dynamic_cast<PartitionByPlanNode*>(AbstractPlanNode::fromJSONObject(obj)));
-        EXPECT_TRUE(pn.get() != NULL);
-        const std::vector<AbstractExpression*> &partitionByExprs = pn->getGroupByExpressions();
-        const std::vector<AbstractExpression*> &sortExprs = pn->getSortExpressions();
-        const std::vector<SortDirectionType> &sortDirs = pn->getSortDirections();
-        EXPECT_TRUE(partitionByExprs.size() == 2);
+        EXPECT_NE(NULL, pn.get());
+        const std::vector<AbstractExpression*> &partitionByExprs = pn->getPartitionExpressions();
+        EXPECT_EQ(2, partitionByExprs.size());
         for (int exprIdx = 0; exprIdx < partitionByExprs.size(); exprIdx += 1) {
             TupleValueExpression *tve = dynamic_cast<TupleValueExpression*>(partitionByExprs[exprIdx]);
-            EXPECT_TRUE(tve != NULL);
+            EXPECT_NE(NULL, tve);
             // These three are all true because of collusion in the
             // construction of the JSON.
-            EXPECT_TRUE(tve->getColumnId() == exprIdx + 1);
-            EXPECT_TRUE(tve->getValueType() == ((exprIdx == 0) ? 8 : 5));
-            EXPECT_TRUE(tve->getValueSize() == ((exprIdx == 0) ? 8 : 4));
+            EXPECT_EQ(exprIdx + 1,              tve->getColumnId());
+            EXPECT_EQ(((exprIdx == 0) ? 8 : 5), tve->getValueType());
+            EXPECT_EQ(((exprIdx == 0) ? 8 : 4), tve->getValueSize());
         }
-        EXPECT_TRUE(sortExprs.size() == sortDirs.size());
-        EXPECT_TRUE(sortDirs[0] == SORT_DIRECTION_TYPE_ASC);
-        EXPECT_TRUE(sortDirs[1] == SORT_DIRECTION_TYPE_DESC);
-        for (int idx = 0; idx < partitionByExprs.size(); idx += 1) {
-            TupleValueExpression *tve = dynamic_cast<TupleValueExpression*>(sortExprs[idx]);
-            EXPECT_TRUE(tve != NULL);
-            // These are all true, again, because of collusion in the
-            // construction of the JSON.
-            EXPECT_TRUE(tve->getColumnId() == idx + 1);
-            EXPECT_TRUE(tve->getValueType() == ((idx == 0) ? 8 : 5));
-            EXPECT_TRUE(tve->getValueSize() == ((idx == 0) ? 8 : 4));
-        }
+        EXPECT_EQ(EXPRESSION_TYPE_AGGREGATE_WINDOWED_RANK, pn->getAggregateOperation());
+        EXPECT_EQ(VALUE_TYPE_BIGINT, pn->getValueType());
+        EXPECT_EQ(8, pn->getValueSize());
     }
+}
 }
 
 
